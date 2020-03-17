@@ -27,6 +27,9 @@ main(int argc, char *argv[])
         perror("open");
         exit(EXIT_FAILURE);
     }
+    //else{
+    //printf("  RD_ONLY Executed\n");
+    //}
     count = read(fd, buf, sizeof(buf));
     buf[count] = '\0';
     write(2, buf, count);
@@ -39,6 +42,9 @@ main(int argc, char *argv[])
         perror("open");
         exit(EXIT_FAILURE);
     }
+    //else{
+    //printf("  lots o stuff Executed\n");
+    //}
     strcpy(buf, "Hello from process");
     sprintf(buf, "%s %d\n", buf, pid);
     write(fd, buf, strlen(buf));
@@ -51,12 +57,31 @@ main(int argc, char *argv[])
         perror("open");
         exit(EXIT_FAILURE);
     }
-    strcpy(buf, "Hello from process");
-    sprintf(buf, "%s %d\n", buf, pid);
-    write(fd, buf, strlen (buf));
-    close(fd);
+    //else{
+    //printf("  write to temp Executed\n");
+    //}
     /* Unlink the file from the /tmp directory */
     unlink(file_name_3);
+    
+    char *file_name_4 = "test0.txt";
+    fd = open(file_name_4, O_CREAT|O_RDWR, S_IRUSR|S_IWUSR);
+    if (fd == -1) {
+        perror("open");
+        exit(EXIT_FAILURE);
+    }
+    //else{
+    //printf("  lots o stuff Executed\n");
+    //}
+    
+    char *file_name_5 = "/tmp/test1.txt";
+    fd = open(file_name_5, O_CREAT|O_RDWR, S_IRUSR|S_IWUSR);
+    if (fd == -1) {
+        perror("open");
+        exit(EXIT_FAILURE);
+    }
+    //else{
+    //printf("  write to temp Executed\n");
+    //}
 
     exit(EXIT_SUCCESS);
 }

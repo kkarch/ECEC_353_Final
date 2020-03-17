@@ -6,8 +6,9 @@
  * Date created: February 20, 2020
  * Date modified: March 6, 2020
  *
- * Compile as follows: gcc -o intercept_syscalls intercept_syscalls.c -std=99 -Wall 
+ * Compile as follows: gcc -o intercept_syscalls intercept_syscalls.c -std=c99 -Wall 
  * Execute as follows: ./intercept_syscalls ./program-name 
+ * Ex: ./intercept_syscalls ./hello_world
  * 
  * The tracee program is in the same directory as your simple_strace program.
  *
@@ -215,6 +216,24 @@ read_buffer_contents (pid_t pid, unsigned int count, long address)
 void 
 modify_buffer_contents (pid_t pid, unsigned char *buffer, unsigned int count, long address)
 {
+    //printf("\n\nFunction modify_buffer_contents called. Address %ld has been rewritten. New buffer in all caps: ", address);
+    // convert data in buffer to uppercase
+    unsigned char *upper_buffer;
+
+        
+    /* Allocate space to store the contents of the buffer with uppercase letter */
+    upper_buffer = (unsigned char *) malloc (sizeof (unsigned char) * count);
+    for (int n = 0; n < strlen(buffer); n++)
+            {
+                upper_buffer[n] = toupper(buffer[n]);
+            }
+    buffer=upper_buffer;
+    
+    //write words to address
+
+    for (int n = 0; n < strlen(buffer); n++){
+        ptrace (PTRACE_POKEDATA, pid, (void *) (address + n * sizeof (unsigned char)), buffer[n]);
+    }
     return;
 }
 
