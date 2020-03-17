@@ -3,7 +3,7 @@
  * Author: Naga Kandasamy
  * Date created: February 24, 2020
  * 
- * Compile as follows: gcc -o counting_sort counting_sort.c -std=c99 -Wall -O3 -lpthread -lm
+ * Compile as follows: gcc -o counting_sort counting_sort.c -std=c99 -Wall -O3 -lpthread -lm -D_GNU_SOURCE
  */
 
 #include <stdlib.h>
@@ -13,13 +13,31 @@
 #include <string.h>
 #include <math.h>
 #include <limits.h>
+#include <malloc.h>
+#include <pthread.h>
+
+typedef struct args_for_thread_t {
+    int tid;                            /* The thread ID */
+    int num_threads;                    /* Number of worker threads */
+    int offset;                         /* Starting offset for thread within the vectors */
+    int chunk_size;                     /* Chunk size */
+    int num_elements;                   /* shared number of elements */
+    pthread_mutex_t *mutex_for_hist;    /* Location of the lock variable protecting sum */
+    int *input_array;
+    int range;
+    int *global_bin;
+
+} ARGS_FOR_THREAD;
+
+//pthread_barrier_t barrier; 
+
 
 /* Do not change the range value. */
 #define MIN_VALUE 0 
-#define MAX_VALUE 1023
+#define MAX_VALUE 1024
 
 /* Comment out if you don't need debug info */
-// #define DEBUG
+//#define DEBUG
 // #define DEBUG_MORE_VERBOSE
 
 int compute_gold (int *, int *, int, int);
@@ -27,6 +45,7 @@ int rand_int (int, int);
 void print_array (int *, int);
 void print_min_and_max_in_array (int *, int);
 void compute_using_pthreads (int *, int *, int, int, int);
+void *thread_sort(void*);
 int check_if_sorted (int *, int);
 int compare_results (int *, int *, int);
 void print_histogram (int *, int, int);
@@ -44,6 +63,10 @@ main (int argc, char **argv)
 
     int range = MAX_VALUE - MIN_VALUE;
     int *input_array, *sorted_array_reference, *sorted_array_d;
+
+    /* Store Execution Times */
+    double s_time = 0;
+    double p_time = 0;
 
     /* Populate the input array with random integers between [0, RANGE]. */
     printf ("Generating input array with %d elements in the range 0 to %d\n", num_elements, range);
@@ -71,10 +94,15 @@ main (int argc, char **argv)
         exit (EXIT_FAILURE);
     }
     memset (sorted_array_reference, 0, num_elements);
+
+    struct timeval start, stop;	// Structure for times
+	gettimeofday (&start, NULL);
     status = compute_gold (input_array, sorted_array_reference, num_elements, range);
     if (status == 0) {
         exit (EXIT_FAILURE);
     }
+    gettimeofday (&stop, NULL);
+    s_time = (stop.tv_sec - start.tv_sec + (stop.tv_usec - start.tv_usec)/(float) 1000000);
 
     status = check_if_sorted (sorted_array_reference, num_elements);
     if (status == 0) {
@@ -97,8 +125,11 @@ main (int argc, char **argv)
         exit (EXIT_FAILURE);
     }
     memset (sorted_array_d, 0, num_elements);
+    gettimeofday (&start, NULL);
     compute_using_pthreads (input_array, sorted_array_d, num_elements, range, num_threads);
-
+    gettimeofday (&stop, NULL);
+    p_time = (stop.tv_sec - start.tv_sec + (stop.tv_usec - start.tv_usec)/(float) 1000000);
+    
     /* Check the two results for correctness. */
     printf ("\nComparing reference and pthread results\n");
     status = compare_results (sorted_array_reference, sorted_array_d, num_elements);
@@ -106,6 +137,11 @@ main (int argc, char **argv)
         printf ("Test passed\n");
     else
         printf ("Test failed\n");
+
+    double speedup = s_time - p_time;
+    printf ("Single Threaded Execution Time: %f s\n",s_time);
+    printf ("Multi Threaded Execution Time: %f s\n",p_time);
+    printf ("Speedup: %f s\n",speedup);
 
     exit (EXIT_SUCCESS);
 }
@@ -148,7 +184,121 @@ compute_gold (int *input_array, int *sorted_array, int num_elements, int range)
 void 
 compute_using_pthreads (int *input_array, int *sorted_array, int num_elements, int range, int num_threads)
 {
-    return;
+    pthread_t *tid = (pthread_t *) malloc (sizeof (pthread_t) * num_threads); /* Data structure to store the thread IDs */
+    if (tid == NULL) {
+        perror ("malloc");
+        exit (EXIT_FAILURE);
+    }
+
+    pthread_attr_t attributes;              /* Thread attributes */
+    pthread_mutex_t mutex_for_hist;         /* Lock for the shared variable sum */
+    
+    pthread_attr_init (&attributes);            /* Initialize the thread attributes to the default values */
+    pthread_mutex_init (&mutex_for_hist, NULL);  /* Initialize the mutex */
+
+    int i,j;
+    int num_bins = range + 1;
+    int *global_bin = (int *) malloc (num_bins * sizeof (int));    
+    if (global_bin == NULL) {
+        perror ("Malloc");
+        exit(EXIT_FAILURE);
+    }
+
+    ARGS_FOR_THREAD **args_for_thread;      /* Fill in structure used by each thread */
+    args_for_thread = malloc (sizeof (ARGS_FOR_THREAD) * num_threads);
+    for (i = 0; i < num_threads; i++){
+        args_for_thread[i] = (ARGS_FOR_THREAD *) malloc (sizeof (ARGS_FOR_THREAD));
+        args_for_thread[i]->tid = i; 
+        args_for_thread[i]->num_threads = num_threads;
+        args_for_thread[i]->num_elements = num_elements;
+        args_for_thread[i]->mutex_for_hist = &mutex_for_hist;
+        args_for_thread[i]->input_array = input_array;
+        args_for_thread[i]->range = range;
+        args_for_thread[i]->global_bin = global_bin;
+    }
+
+
+
+    /* Create each thread and execute Jacobi function */
+    for (i = 0; i < num_threads; i++)
+        pthread_create (&tid[i], &attributes, thread_sort, (void *) args_for_thread[i]);
+					 
+    /* Wait for the workers to finish */
+    for(i = 0; i < num_threads-1; i++)
+        pthread_join (tid[i], NULL);
+        //printf("Joined\n");
+
+    #ifdef DEBUG
+    printf("Global Histogram Printing:\n");
+    print_histogram (global_bin, num_bins, num_elements);
+    #endif
+
+    /* Generate the sorted array. */
+    int idx = 0;
+    for (i = 0; i < num_bins; i++) {
+        for (j = 0; j < global_bin[i]; j++) {
+            sorted_array[idx++] = i;
+        }
+    }
+
+    /* Free data structures */
+    for(i = 0; i < num_threads; i++)
+        free ((void *) args_for_thread[i]);
+
+}
+
+void *
+thread_sort(void *args)
+{
+    int debug = 0;
+    /* Unpack Args */
+    ARGS_FOR_THREAD *targs = (ARGS_FOR_THREAD *) args;
+
+    int i;
+    int num_bins = targs->range + 1;
+    int *bin = (int *) malloc (num_bins * sizeof (int));    
+    if (bin == NULL) {
+        perror ("Malloc");
+        return 0;
+    }
+
+    memset(bin, 0, num_bins); /* Initialize histogram bins to zero */ 
+    for (i = targs->tid; i < targs->num_elements; i+=targs->num_threads){
+        bin[targs->input_array[i]]++;
+    }
+
+    if (targs->tid == 0 && debug > 0)
+    {
+        switch (debug)
+        {
+        case 1:
+            print_array(targs->input_array,targs->num_elements);
+            break;
+        case 2:
+            printf("Thread 0: Partial Histogram\n");
+            print_histogram (bin, num_bins, targs->num_elements);
+        default:
+            break;
+        }
+    }
+
+    pthread_mutex_lock(targs->mutex_for_hist);
+    #ifdef DEBUG_MORE_VERBOSE
+    printf("thread %d locking...\n",targs->tid);
+    #endif
+
+    for (i = 0; i < num_bins; i++) {
+
+    #ifdef DEBUG_MORE_VERBOSE
+    printf ("Bin %d: %d\n", i, bin[i]);
+    #endif
+
+    targs->global_bin[i]+=bin[i];
+    }
+
+    pthread_mutex_unlock(targs->mutex_for_hist);
+    
+    pthread_exit ((void *)0);
 }
 
 /* Check if the array is sorted. */
