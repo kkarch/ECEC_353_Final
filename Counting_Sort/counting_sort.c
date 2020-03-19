@@ -26,15 +26,19 @@ typedef struct args_for_thread_t {
     int *input_array;
     int range;
     int *global_bin;
+    int *tbin;
+    int *sorted;
+    int *idx;
 
 } ARGS_FOR_THREAD;
 
-//pthread_barrier_t barrier; 
+pthread_barrier_t barrier;
+pthread_barrier_t barrier2; 
 
 
 /* Do not change the range value. */
 #define MIN_VALUE 0 
-#define MAX_VALUE 1024
+#define MAX_VALUE 1023
 
 /* Comment out if you don't need debug info */
 //#define DEBUG
@@ -133,6 +137,11 @@ main (int argc, char **argv)
     /* Check the two results for correctness. */
     printf ("\nComparing reference and pthread results\n");
     status = compare_results (sorted_array_reference, sorted_array_d, num_elements);
+    
+#ifdef DEBUG
+    print_array (sorted_array_d, num_elements);
+#endif
+    
     if (status == 1)
         printf ("Test passed\n");
     else
@@ -196,14 +205,34 @@ compute_using_pthreads (int *input_array, int *sorted_array, int num_elements, i
     pthread_attr_init (&attributes);            /* Initialize the thread attributes to the default values */
     pthread_mutex_init (&mutex_for_hist, NULL);  /* Initialize the mutex */
 
-    int i,j;
+    int bar_ret = pthread_barrier_init(&barrier, NULL, num_threads); // Init thread barrier 
+    if (bar_ret != 0){
+        printf("Barrier Init Failure\n");
+        exit(EXIT_FAILURE);
+        }
+    bar_ret = pthread_barrier_init(&barrier2, NULL, num_threads); // Init thread barrier 
+    if (bar_ret != 0){
+        printf("Barrier Init Failure\n");
+        exit(EXIT_FAILURE);
+        }
+
+    int i;
     int num_bins = range + 1;
     int *global_bin = (int *) malloc (num_bins * sizeof (int));    
     if (global_bin == NULL) {
         perror ("Malloc");
         exit(EXIT_FAILURE);
     }
+    memset(global_bin, 0, num_bins); /* Initialize histogram bins to zero */
 
+    int *tbin = (int *) malloc (num_threads*num_bins * sizeof (int));    
+    if (tbin == NULL) {
+        perror ("Malloc");
+        exit(EXIT_FAILURE);
+    }
+
+    memset(tbin, 0, num_bins); /* Initialize histogram bins to zero */
+    int chunk = (int) floor ((float) num_bins/(float) num_threads); // Compute the chunk size
     ARGS_FOR_THREAD **args_for_thread;      /* Fill in structure used by each thread */
     args_for_thread = malloc (sizeof (ARGS_FOR_THREAD) * num_threads);
     for (i = 0; i < num_threads; i++){
@@ -215,6 +244,10 @@ compute_using_pthreads (int *input_array, int *sorted_array, int num_elements, i
         args_for_thread[i]->input_array = input_array;
         args_for_thread[i]->range = range;
         args_for_thread[i]->global_bin = global_bin;
+        args_for_thread[i]->chunk_size = chunk;
+        args_for_thread[i]->sorted = sorted_array;
+        args_for_thread[i]->offset= i*chunk;
+        args_for_thread[i]->tbin = tbin;
     }
 
 
@@ -228,18 +261,12 @@ compute_using_pthreads (int *input_array, int *sorted_array, int num_elements, i
         pthread_join (tid[i], NULL);
         //printf("Joined\n");
 
-    #ifdef DEBUG
+    #ifdef DEBUG_MORE_VERBOSE
     printf("Global Histogram Printing:\n");
     print_histogram (global_bin, num_bins, num_elements);
     #endif
 
-    /* Generate the sorted array. */
-    int idx = 0;
-    for (i = 0; i < num_bins; i++) {
-        for (j = 0; j < global_bin[i]; j++) {
-            sorted_array[idx++] = i;
-        }
-    }
+
 
     /* Free data structures */
     for(i = 0; i < num_threads; i++)
@@ -251,21 +278,51 @@ void *
 thread_sort(void *args)
 {
     int debug = 0;
+    int idx = 0;
     /* Unpack Args */
     ARGS_FOR_THREAD *targs = (ARGS_FOR_THREAD *) args;
 
     int i;
     int num_bins = targs->range + 1;
-    int *bin = (int *) malloc (num_bins * sizeof (int));    
-    if (bin == NULL) {
-        perror ("Malloc");
-        return 0;
-    }
 
-    memset(bin, 0, num_bins); /* Initialize histogram bins to zero */ 
-    for (i = targs->tid; i < targs->num_elements; i+=targs->num_threads){
-        bin[targs->input_array[i]]++;
+    /* Striding */ 
+    // for (i = targs->tid; i < targs->num_elements; i+=targs->num_threads){
+    //     targs->global_bin[targs->input_array[i]]++;
+    // }
+
+    //  /* Chunky Boi */
+    // int mystart = targs->tid*targs->chunk_size;
+    // int mystop = (targs->tid + 1)*targs->chunk_size;
+
+    // for (i = mystart; i < mystop; i++){
+    //     bin[targs->input_array[i]]++;
+    // }
+    if (targs->tid < (targs->num_threads - 1)) {
+        for (i = targs->offset; i < (targs->offset + targs->chunk_size); i++)
+            targs->tbin[targs->tid * num_bins + targs->input_array[i]]++;
     }
+    else { /* This takes care of the number of elements that the final thread must process */
+        for (i = targs->offset; i < targs->num_elements; i++)
+            targs->tbin[targs->tid * num_bins + targs->input_array[i]]++;
+    }
+    pthread_barrier_wait(&barrier);
+    if (targs->tid < (targs->num_threads - 1)) 
+    {
+        for (int i = targs->offset; i < (targs->offset + targs->chunk_size); i++)
+            for (int j = 0; j < targs->num_threads; j++)
+                targs->global_bin[i] += targs->tbin[j * num_bins + i];
+    }
+    else
+    {
+        for (int i = targs->offset; i < num_bins; i++)
+            for (int j = 0; j < targs->num_threads; j++)
+                targs->global_bin[i] += targs->tbin[j * num_bins + i];
+    }
+    
+
+    pthread_barrier_wait(&barrier2);
+
+    
 
     if (targs->tid == 0 && debug > 0)
     {
@@ -276,27 +333,44 @@ thread_sort(void *args)
             break;
         case 2:
             printf("Thread 0: Partial Histogram\n");
-            print_histogram (bin, num_bins, targs->num_elements);
+            print_histogram (targs->tbin, num_bins, targs->num_elements);
         default:
             break;
         }
     }
 
-    pthread_mutex_lock(targs->mutex_for_hist);
-    #ifdef DEBUG_MORE_VERBOSE
-    printf("thread %d locking...\n",targs->tid);
-    #endif
+    // pthread_mutex_lock(targs->mutex_for_hist);
+    // #ifdef DEBUG_MORE_VERBOSE
+    // printf("thread %d locking...\n",targs->tid);
+    // #endif
 
-    for (i = 0; i < num_bins; i++) {
+    // for (i = 0; i < num_bins; i++) {
 
-    #ifdef DEBUG_MORE_VERBOSE
-    printf ("Bin %d: %d\n", i, bin[i]);
-    #endif
+    // #ifdef DEBUG_MORE_VERBOSE
+    // printf ("Bin %d: %d\n", i, bin[i]);
+    // #endif
 
-    targs->global_bin[i]+=bin[i];
+    // targs->global_bin[i]+=bin[i];
+    // }
+
+    // pthread_mutex_unlock(targs->mutex_for_hist);
+
+    /* Generate the sorted array. */
+
+    for (int i = 0; i < targs->offset;i++)
+        idx += targs->global_bin[i];
+    /* Generate the sorted array. */
+    if (targs->tid < (targs->num_threads - 1)) {
+        for (int i = targs->offset; i < (targs->offset + targs->chunk_size); i++)
+            for (int j = 0; j < targs->global_bin[i]; j++)
+                targs->sorted[idx++] = i;
     }
+    else { /* This takes care of the number of elements that the final thread must process */
+        for (int i = targs->offset; i < num_bins; i++)
+            for (int j = 0; j < targs->global_bin[i]; j++)
+                targs->sorted[idx++] = i;
+    }    
 
-    pthread_mutex_unlock(targs->mutex_for_hist);
     
     pthread_exit ((void *)0);
 }
