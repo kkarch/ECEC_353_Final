@@ -291,18 +291,19 @@ thread_sort(void *args)
     // }
 
     //  /* Chunky Boi */
-    // int mystart = targs->tid*targs->chunk_size;
-    // int mystop = (targs->tid + 1)*targs->chunk_size;
+    int chunk_el = floor(targs->num_elements/targs->num_threads);
+    int mystart = targs->tid*chunk_el;
+    int mystop = (targs->tid + 1)*chunk_el;
 
     // for (i = mystart; i < mystop; i++){
     //     bin[targs->input_array[i]]++;
     // }
     if (targs->tid < (targs->num_threads - 1)) {
-        for (i = targs->offset; i < (targs->offset + targs->chunk_size); i++)
+        for (i = mystart; i < mystop; i++)
             targs->tbin[targs->tid * num_bins + targs->input_array[i]]++;
     }
     else { /* This takes care of the number of elements that the final thread must process */
-        for (i = targs->offset; i < targs->num_elements; i++)
+        for (i = mystart; i < targs->num_elements; i++)
             targs->tbin[targs->tid * num_bins + targs->input_array[i]]++;
     }
     pthread_barrier_wait(&barrier);
